@@ -133,6 +133,225 @@ def load_ue4_translation_unit(file_path, ast_cache_path, compile_commands, parse
 	return translation_unit
 
 
+def foreach_cursor(action, cursor, depth=0):
+	'''
+		Recursively iterates over a cursors children, applying
+		a specified action.
+		This applies the action to the given cursor as well.
+
+		The action should be some callable that takes a WrappedCursor and int depth.
+	'''
+	action(cursor, depth)
+	for child in cursor.get_children():
+		foreach_cursor(action, WrappedCursor(child, cursor), depth+1)
+
+
+def find_cursor(predicate, cursor):
+	'''
+		Searches the given cursor's direct children, looking for one
+		that satisfies the given predicate.
+		Only returns the first matching cursor.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A matching cursor if found, None otherwise.
+	'''
+	for child in cursor.get_children():
+		wrapped_child = WrappedCursor(child, cursor)
+		if predicate(wrapped_child):
+			return wrapped_child
+
+
+def find_cursor_recursive(predicate, cursor):
+	'''
+		Searches the given cursor's children recursively, looking for one
+		that satisfies the given predicate.
+		Only returns the first matching cursor.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A matching cursor if found, None otherwise.
+	'''
+	for child in cursor.get_children():
+		wrapped_child = WrappedCursor(child, cursor)
+		if predicate(wrapped_child):
+			return wrapped_child
+
+		found_in_child = find_cursor_recursive(predicate, wrapped_child)
+		if found_in_child:
+			return found_in_child
+
+
+def find_cursor_many(predicate, cursor):
+	'''
+		Searches the given cursor's direct children, looking for any
+		that satisfies the given predicate.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A list of matching cursors, or empty list if none were found.
+	'''
+	found = []
+	for child in cursor.get_children():
+		wrapped_child = WrappedCursor(child, cursor)
+		if predicate(wrapped_child):
+			found += [wrapped_child]
+
+	return found
+
+
+def find_cursor_recursive_many(predicate, cursor):
+	'''
+		Searches the given cursor's children recursively, looking for any
+		that satisfy the given predicate.
+		Note, this **will not** recurse into children of found matches.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A list of matching cursors, or empty list if none were found.
+
+	'''
+	found = []
+	for child in cursor.get_children():
+		wrapped_child = WrappedCursor(child, cursor)
+		if predicate(wrapped_child):
+			found += [wrapped_child]
+
+		else:
+			found += find_cursor_recursive_many(predicate, wrapped_child)
+
+	return found
+
+
+def find_cursor_recursive_all(predicate, cursor):
+	'''
+		Searches the given cursor's children recursively, looking for any
+		that satisfy the given predicate.
+		Note, this **will** recurse into the children of found matches.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A list of matching cursors, or empty list if none were found.
+	'''
+	found = []
+	for child in cursor.get_children():
+		wrapped_child(child, cursor)
+		if predicate(wrapped_child):
+			found += [wrapped_child]
+
+		found += find_cursor_recursive_all(predicate, wrapped_child)
+
+	return found
+
+
+def foreach_parent(action, cursor, depth=0):
+	'''
+		Recursively iterates over a cursor'ss parents, applying
+		a specified action.
+		This applies the action to the given cursor as well.
+
+		The action should be some callable that takes a WrappedCursor and int depth.
+	'''
+	if cursor is not None:
+		action(cursor, depth)
+
+		if hasattr(cursor, 'parent'):
+			foreach_parent(action, cursor.parent, depth+1)
+
+
+def find_parent(predicate, cursor):
+	'''
+		Searches the given cursor's parents recursively, looking for any
+		that satisfy the given predicate.
+		Note, this **will not** recurse into the parents of found matches.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A matching cursor if found, None otherwise.
+	'''
+
+	if cursor.parent is not None:
+		if predicate(cursor.parent):
+			return cursor.parent
+		else:
+			return find_parent(predicate, cursor.parent)
+
+
+def find_parent_many(predicate, cursor):
+	'''
+		Searches the given cursor's parents recursively, looking for any
+		that satisfy the given predicate.
+		Note, this **will** recurse into the parents of found matches.
+
+		Predicates should be some callable that takes a single argument, a  WrappedCursor.
+
+		@return A list of matching cursors, or empty list if none were found.
+	'''
+
+	found = []
+	if cursor.parent is not None:
+		if predicate(cursor.parent):
+			found += [cursor.parent]
+
+		found += find_parent_many(predicate, cursor.parent)
+
+	return found
+
+
+def freeze_predicates(predicates):
+	'''
+		Convenience method that freezes a set of predicates.
+
+		Input is expected to be an iterable of lists.
+		Each list is treated as a single predicate to be frozen.
+		The first element in each list should be a callable.
+		All remaining elements in the list are non-keyword arguments
+		to be applied to the callable in order.
+	'''
+
+	return [partial(predicate[0], *predicate[1:]) for predicate in predicates]
+
+
+def cursor_matches_all(*predicates):
+	'''
+		Returns a predicate that is true only if all given
+		predicates are true.
+
+		@see freeze_predicates for an explanation of inputs.
+		It's expected that each given predicate also accepts
+		a cursor as its last non-keyword argument.
+
+		Note, this may end up evaluating all predicates, even if
+		some are found to be false.
+	'''
+
+	predicates = freeze_predicates(predicates)
+	def matches_all(cursor):
+		return all((predicate(cursor) for predicate in predicates))
+
+	return matches_all
+
+
+def cursor_matches_any(*predicates):
+	'''
+		Returns a predicate that is true if any of the given
+		predicates are true.
+
+		@see freeze_predicates for an explanation of inputs.
+		It's expected that each given predicate also accepts
+		a cursor as its last non-keyword argument.
+
+		Note, this may end up evaluating all predicates, even if
+		some are found to be true.
+	'''
+
+	predicates = freeze_predicates(predicates)
+	def matches_any(cursor):
+		return any((predicate(cursor) for predicate in predicates))
+
+	return matches_any
+
+
 if __name__ == '__main__':
 
 	argument_parser = argparse.ArgumentParser('GetCompileCommands')
@@ -142,235 +361,14 @@ if __name__ == '__main__':
 	argument_parser.add_argument('-f', '--cache_file', help='Points to a saved AST file. If no file is found, or the file is invalid, a the source will be parsed and saved here for future iterations.', default=None)
 	arguments = argument_parser.parse_args()
 
-	compile_commands = CompileCommands(__get_file_name_full(arguments.compile_commands))
-	file_path = __get_file_name_full(arguments.file_name)
-	llvm_lib_dir = __get_file_name_full(arguments.llvm_libs)
-	cached_ast_path = __get_file_name_full(arguments.cache_file) if arguments.cache_file else None
+	compile_commands = CompileCommands(__get_full_file_name(arguments.compile_commands))
+	file_path = __get_full_file_name(arguments.file_name)
+	llvm_lib_dir = __get_full_file_name(arguments.llvm_libs)
+	cached_ast_path = __get_full_file_name(arguments.cache_file) if arguments.cache_file else None
 
 	# Make sure we set the library path before doing anything else.
 	clang.cindex.Config.set_library_path(llvm_lib_dir)
 	translation_unit = load_ue4_translation_unit(file_path, cached_ast_path, compile_commands)
-
-	def foreach_cursor(action, cursor, depth=0):
-		'''
-			Recursively iterates over a cursors children, applying
-			a specified action.
-			This applies the action to the given cursor as well.
-
-			The action should be some callable that takes a WrappedCursor and int depth.
-		'''
-		action(cursor, depth)
-		for child in cursor.get_children():
-			foreach_cursor(action, WrappedCursor(child, cursor), depth+1)
-
-	def find_cursor(predicate, cursor):
-		'''
-			Searches the given cursor's direct children, looking for one
-			that satisfies the given predicate.
-			Only returns the first matching cursor.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A matching cursor if found, None otherwise.
-		'''
-		for child in cursor.get_children():
-			wrapped_child = WrappedCursor(child, cursor)
-			if predicate(wrapped_child):
-				return wrapped_child
-
-	def find_cursor_recursive(predicate, cursor):
-		'''
-			Searches the given cursor's children recursively, looking for one
-			that satisfies the given predicate.
-			Only returns the first matching cursor.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A matching cursor if found, None otherwise.
-		'''
-		for child in cursor.get_children():
-			wrapped_child = WrappedCursor(child, cursor)
-			if predicate(wrapped_child):
-				return wrapped_child
-
-			found_in_child = find_cursor_recursive(predicate, wrapped_child)
-			if found_in_child:
-				return found_in_child
-
-	def find_cursor_many(predicate, cursor):
-		'''
-			Searches the given cursor's direct children, looking for any
-			that satisfies the given predicate.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A list of matching cursors, or empty list if none were found.
-		'''
-		found = []
-		for child in cursor.get_children():
-			wrapped_child = WrappedCursor(child, cursor)
-			if predicate(wrapped_child):
-				found += [wrapped_child]
-
-		return found
-
-	def find_cursor_recursive_many(predicate, cursor):
-		'''
-			Searches the given cursor's children recursively, looking for any
-			that satisfy the given predicate.
-			Note, this **will not** recurse into children of found matches.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A list of matching cursors, or empty list if none were found.
-
-		'''
-		found = []
-		for child in cursor.get_children():
-			wrapped_child = WrappedCursor(child, cursor)
-			if predicate(wrapped_child):
-				found += [wrapped_child]
-
-			else:
-				found += find_cursor_recursive_many(predicate, wrapped_child)
-
-		return found
-
-	def find_cursor_recursive_all(predicate, cursor):
-		'''
-			Searches the given cursor's children recursively, looking for any
-			that satisfy the given predicate.
-			Note, this **will** recurse into the children of found matches.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A list of matching cursors, or empty list if none were found.
-		'''
-		found = []
-		for child in cursor.get_children():
-			wrapped_child(child, cursor)
-			if predicate(wrapped_child):
-				found += [wrapped_child]
-
-			found += find_cursor_recursive_all(predicate, wrapped_child)
-
-		return found
-
-	def foreach_parent(action, cursor, depth=0):
-		'''
-			Recursively iterates over a cursor'ss parents, applying
-			a specified action.
-			This applies the action to the given cursor as well.
-
-			The action should be some callable that takes a WrappedCursor and int depth.
-		'''
-		action(cursor, depth)
-		if cursor.parent is not None:
-			foreach_parent(action, cursor.parent, depth+1)
-
-	def find_parent(predicate, cursor):
-		'''
-			Searches the given cursor's parents recursively, looking for any
-			that satisfy the given predicate.
-			Note, this **will not** recurse into the parents of found matches.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A matching cursor if found, None otherwise.
-		'''
-
-		if cursor.parent is not None:
-			if predicate(cursor.parent):
-				return cursor.parent
-			else:
-				return find_parent(predicate, cursor.parent)
-
-	def find_parent_many(predicate, cursor):
-		'''
-			Searches the given cursor's parents recursively, looking for any
-			that satisfy the given predicate.
-			Note, this **will** recurse into the parents of found matches.
-
-			Predicates should be some callable that takes a single argument, a  WrappedCursor.
-
-			@return A list of matching cursors, or empty list if none were found.
-		'''
-
-		found = []
-		if cursor.parent is not None:
-			if predicate(cursor.parent):
-				found += [cursor.parent]
-
-			found += find_parent_many(predicate, cursor.parent)
-
-		return found
-
-
-	def cursor_is_of_kind(kind, cursor):
-		return cursor.kind == kind
-
-	def cursor_is_of_type(type, cursor):
-		return type == cursor.type
-
-	def cursor_is_named(name, cursor):
-		return cursor.spelling == name
-
-	def cursor_name_starts_with(name, cursor):
-		return cursor.spelling.startswith(name)
-
-	def cursor_references(referenced, cursor):
-		return referenced == cursor.referenced
-
-	def freeze_predicates(predicates):
-		'''
-			Convenience method that freezes a set of predicates.
-
-			Input is expected to be an iterable of lists.
-			Each list is treated as a single predicate to be frozen.
-			The first element in each list should be a callable.
-			All remaining elements in the list are non-keyword arguments
-			to be applied to the callable in order.
-		'''
-
-		return [partial(predicate[0], *predicate[1:]) for predicate in predicates]
-
-	def cursor_matches_all(*predicates):
-		'''
-			Returns a predicate that is true only if all given
-			predicates are true.
-
-			@see freeze_predicates for an explanation of inputs.
-			Its expected that each given predicate also accepts
-			a cursor as its last non-keyword argument.
-
-			Note, this may end up evaluating all predicates, even if
-			some are found to be false.
-		'''
-
-		predicates = freeze_predicates(predicates)
-		def matches_all(cursor):
-			return all((predicate(cursor) for predicate in predicates))
-
-		return matches_all
-
-	def cursor_matches_any(*predicates):
-		'''
-			Returns a predicate that is true if any of the given
-			predicates are true.
-
-			@see freeze_predicates for an explanation of inputs.
-			Its expected that each given predicate also accepts
-			a cursor as its last non-keyword argument.
-
-			Note, this may end up evaluating all predicates, even if
-			some are found to be true.
-		'''
-
-		predicates = freeze_predicates(predicates)
-		def matches_any(cursor):
-			return any((predicate(cursor) for predicate in predicates))
-
-		return matches_any
 
 
 	'''
@@ -388,14 +386,15 @@ if __name__ == '__main__':
 			3. Find the declaration of FileWriter.
 			4. Find all methods inside FNetworkProfiler.
 			5. Find all calls within each method.
-			6. Remove any calls that don't reference FileWriter.
+			6. Remove any calls that don't reference FileWriter,
+				or that seem to be inappropriate (e.g., checks).
 
 		Grouping:
 
 			Iterate over each method.
 			Iterate over each call.
 
-			1. Inspect the calls arguments.
+			1. Inspect the call's arguments.
 			2. If any arguments are references to ENetworkProfilingPayload values,
 				then we start a new group.
 				This call is the first call in the new group.
@@ -411,10 +410,99 @@ if __name__ == '__main__':
 			Each type will have a Serialize method that copies the original set of calls (minus the Type serialization).
 			Each type will have a constructor, accepting a value for each member variable, and an initializer list initializing all variables.
 
+		The following is actual output from the command.
+
+			USTRUCT()
+			struct FNetworkProfilerType_SendBunch : public FNetworkProfilerType_Base
+			{
+			public:
+				GENERATED_BODY();
+				NETWORK_PROFILER_BODY(SendBunch);
+
+				FNetworkProfilerType_SendBunch(const uint16 InChannelIndex, const uint16 InNumBits, const uint32 InNameTableIndex)
+					: ChannelIndex(InChannelIndex)
+					, NumBits(InNumBits)
+					, NameTableIndex(InNameTableIndex)
+				{
+				}
+
+				~FNetworkProfilerType_SendBunch()
+				{
+				}
+
+				const uint16 GetChannelIndex() const
+				{
+					return ChannelIndex;
+				}
+
+				const uint16 GetNumBits() const
+				{
+					return NumBits;
+				}
+
+				const uint32 GetNameTableIndex() const
+				{
+					return NameTableIndex;
+				}
+
+				void Serialize(FArchive& Ar)
+				{
+					Ar << ChannelIndex;
+					Ar.SerializeIntPacked(NameTableIndex);
+					Ar << NumBits;
+				}
+
+			private:
+				uint16 ChannelIndex;
+				uint16 NumBits;
+				uint32 NameTableIndex;
+			};
+			NETWORK_PROFILER_TYPE_TRAITS(SendBunch);
+
+			FNetworkProfilerType_SendBunch SendBunch();
+			SendBunch.Serialize(*FileWriter);
+			<SourceLocation file '/home/widmo/Projects/UnrealEngine/Engine/Source/Runtime/Engine/Private/NetworkProfiler.cpp', line 416, column 3>
+
+
+		These serialization bits were found around line 416:
+
+			(*FileWriter) << Type;
+			(*FileWriter) << ChannelIndex;
+			(*FileWriter).SerializeIntPacked(NameTableIndex);
+			(*FileWriter) << NumBits;
+
+		From the generation, we can tell:
+
+			Type was resolved to be NPTYPE_SendBunch.
+			ChannelIndex was resolved to be a uint16.
+			NameTableIndex was resolved to be uint32.
+			NumBits was resolved to be uint16.
+
+			Variables were sorted on size before being declared.
+			Serialization snippets were pulled from the source code (order unchanged).
 	'''
 
 	# Get our translation unit.
 	translation_unit_cursor = WrappedCursor(translation_unit.cursor, None)
+
+
+	# Define a few repeated convenience methods
+	# These will be composed using the utility methods above.
+	def cursor_is_of_kind(kind, cursor):
+		return cursor.kind == kind
+
+	def cursor_is_of_type(type, cursor):
+		return type == cursor.type
+
+	def cursor_is_named(name, cursor):
+		return cursor.spelling == name
+
+	def cursor_name_starts_with(name, cursor):
+		return cursor.spelling.startswith(name)
+
+	def cursor_references(referenced, cursor):
+		return referenced == cursor.referenced
+
 
 	# Find FNetworkProfiler.
 	# We do this by searching all top level children of the Translation Unit
@@ -448,7 +536,7 @@ if __name__ == '__main__':
 
 	# Get the corresponding Method Definitions.
 	method_defs = (
-		method_decl.get_definition()
+		WrappedCursor(method_decl.get_definition(), translation_unit_cursor)
 		for method_decl in method_decls
 	)
 
@@ -508,6 +596,7 @@ if __name__ == '__main__':
 	# We need to recurse into the call, find any cursors referencing variables,
 	# go to those variable declarations, and recurse into them.
 
+
 	groups = []
 	outstanding_group = None
 	for method, calls in calls_referencing_file_writer:
@@ -517,7 +606,10 @@ if __name__ == '__main__':
 			groups += [outstanding_group]
 			outstanding_group = None
 
+
+		#print(method.spelling)
 		for call in calls:
+
 
 			# Find all the variables this call is using,
 			# making sure to cull out things we don't want (like function prototypes).
@@ -531,6 +623,8 @@ if __name__ == '__main__':
 					call
 				)
 			]
+
+			#print(call.spelling)
 
 			for variable_ref in variable_refs:
 
@@ -546,18 +640,36 @@ if __name__ == '__main__':
 					variable_ref.referenced
 				)
 
+
+				if network_profiling_payload_decl is None:
+
+					if outstanding_group:
+						# Walk the parents and look for exposed MEMBER_REFs.
+						# This will ensure that we're pointing at the
+						# correct member variable (if a member variable is
+						# being referenced).
+						# Technically, we could do this in the query above.
+
+						member_ref = find_parent(
+							cursor_matches_all(
+								[cursor_is_of_kind, clang.cindex.CursorKind.MEMBER_REF_EXPR],
+								[lambda cursor: cursor.type.kind != clang.cindex.TypeKind.UNEXPOSED]
+							),
+							variable_ref
+						)
+
+						variable_ref = member_ref or variable_ref
+
+						outstanding_group += [[method, call, variable_ref]]
+
+
 				# If we found a payload type, we'll use that to denote the start of a new group.
 				# First, we have to clean any outstanding ones.
-				if network_profiling_payload_decl is not None:
+				else:
 					if outstanding_group:
 						groups += [outstanding_group]
 
 					outstanding_group = [[method, call, network_profiling_payload_decl]]
-
-				# If we didn't find a payload type, that's fine.
-				# We'll just add the current variable to group (if we have one).
-				elif outstanding_group:
-					outstanding_group += [[method, call, variable_ref]]
 
 
 	if outstanding_group:
@@ -609,14 +721,9 @@ if __name__ == '__main__':
 
 	init_list_template = '''{variable_name}(In{variable_name})'''
 
-	construct_template = '''FNetworkProfilerType_{type} {type}({variable_name_list});'''
+	construct_template = '''FNetworkProfilerType_{type} {type}{inst_constructor_call};'''
 
 	call_serialize_template = '''{type}.Serialize(*FileWriter);'''
-
-
-	# Also read in our source file so we can pull out some code!
-	with open(file_path, 'r') as source_file:
-		source_lines = source_file.read().split('\n')
 
 	for group in groups:
 		payload_method, payload_call, payload_var = group[0]
@@ -629,7 +736,7 @@ if __name__ == '__main__':
 		get_methods = ''
 		serialize_body = ''
 		member_decls=''
-		variable_name_list = ''
+		inst_constructor_call = ''
 
 		variables = (variable for method, call, variable in group)
 		sorted_variables = sorted(variables, key=lambda variable: variable.type.get_size())
@@ -663,7 +770,7 @@ if __name__ == '__main__':
 
 			init_list = '\n\t\t\t: ' + init_list
 
-			get_methods = '\n\t\t'.join((
+			get_methods = '\t\t'.join((
 				variable_template['get_method']
 				for variable_template in variable_templates
 			))
@@ -677,12 +784,55 @@ if __name__ == '__main__':
 
 			member_decls = '\t\t' + member_decls
 
-			serialize_body = '\n\t\t\t'.join([
-				source_lines[call.extent.start.line-1][call.extent.start.column-1:call.extent.end.column].replace('(*FileWriter)', 'Ar')
+			# This bit is admittedly hacky.
+			# We want to convert our calls into source.
+			# We *could* just read the source code we're parsing,
+			# grab the location, and then paste that in.
+			# However, we may have done some munging.
+			# For example, in FNetworkProfiler::FlushOutgoingBunches,
+			# FSendBunchInfo / BunchInfo members are used, and instead we'll
+			# want to use our own members.
+			# Maybe a safer approach would be something like:
+			#	1. Check to see if its operator<<.
+			#		a. If it is, assume semantic Ar << {variable.spelling}
+			#	2. Check to see if the call references a Member Function.
+			#		a. If it does, and it's a member of FArchive,
+			#			call it via Ar.{call.spelling}({variable.spelling})
+			#		b. If it does, but it's not a member of FArchive,
+			#			call it via {variable.spelling}.{call.spelling}(Ar)
+			#	3. Check to see if it references an unbound function.
+			#		a. If it does, figure out argument order, and place the Ar / Variable appropriately.
+			#
+			# Also, this fails to handle multiple variables that are passed into the same function...
+
+			# Note, we use the group ordering here and not the sorted variable
+			# ordering. This means that the generated body should be logically
+			# identical to the first.
+
+			def call_to_serialize(call, variable):
+				if call.spelling == 'operator<<':
+					return f'Ar << {variable.spelling};'
+
+				elif 'IntPacked' in call.spelling:
+					return f'Ar.{call.spelling}({variable.spelling});'
+
+				else:
+					return f'{variable.spelling}.{call.spelling}(Ar);'
+
+
+			serialize_body = '\n\t\t\t'.join((
+				call_to_serialize(call, variable)
 				for method, call, variable in group
-			])
+			))
 
 			serialize_body = '\t\t\t' + serialize_body
+
+			inst_constructor_call = '({})'.format(
+				', '.join(
+					variable_name
+					for variable_name, variable_type in variables_name_and_type
+				)
+			)
 
 
 		format_kwargs = {
@@ -692,7 +842,7 @@ if __name__ == '__main__':
 			'serialize_body': serialize_body,
 			'member_decls': member_decls,
 			'type': type,
-			'variable_name_list': variable_name_list,
+			'inst_constructor_call': inst_constructor_call,
 		}
 
 		struct = struct_template.format(**format_kwargs)
